@@ -131,7 +131,7 @@ namespace ChocolArm64.Instructions
                 context.EmitLdc_I8(1);
                 context.EmitStintzr(op.Rs);
 
-                context.Emit(OpCodes.Br_S, lblEnd);
+                context.Emit(OpCodes.Br, lblEnd);
             }
 
             context.MarkLabel(lblEx);
