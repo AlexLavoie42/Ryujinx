@@ -132,12 +132,6 @@ namespace ChocolArm64.Instructions
 
             context.MarkLabel(lblFastPath);
 
-            context.EmitSttmp2();
-
-            context.Emit(OpCodes.Pop);
-
-            context.EmitLdtmp2();
-
             EmitPtPointerLoad(context);
 
             switch (size)
@@ -169,12 +163,6 @@ namespace ChocolArm64.Instructions
             EmitPtPointerLoad(context);
 
             context.EmitCall(typeof(Sse), nameof(Sse.LoadVector128));
-
-            context.EmitStvectmp();
-
-            context.Emit(OpCodes.Pop);
-
-            context.EmitLdvectmp();
 
             context.MarkLabel(lblEnd);
         }
@@ -210,8 +198,6 @@ namespace ChocolArm64.Instructions
                 case 3: context.Emit(OpCodes.Stind_I8); break;
             }
 
-            context.Emit(OpCodes.Pop);
-
             context.MarkLabel(lblEnd);
         }
 
@@ -240,8 +226,6 @@ namespace ChocolArm64.Instructions
 
             context.EmitCall(typeof(Sse), nameof(Sse.Store));
 
-            context.Emit(OpCodes.Pop);
-
             context.MarkLabel(lblEnd);
         }
 
@@ -261,6 +245,9 @@ namespace ChocolArm64.Instructions
         private static unsafe void EmitPtPointerLoad(ILEmitterCtx context)
         {
             context.EmitSttmp2();
+
+            context.Emit(OpCodes.Pop);
+
             context.EmitLdtmp2();
 
             context.EmitLsr(MemoryManager.PageBits);
