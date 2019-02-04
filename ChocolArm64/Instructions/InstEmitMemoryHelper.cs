@@ -43,18 +43,25 @@ namespace ChocolArm64.Instructions
 
             if (isSimd)
             {
-                if (size == 4)
+                if (size != 4)
                 {
-                    EmitReadVector(context, size);
+                    EmitReadVectorFallback(context, size);
                 }
                 else
                 {
-                    EmitReadVectorFallback(context, size);
+                    EmitReadVector(context, size);
                 }
             }
             else
             {
-                EmitReadInt(context, size);
+                if (context.Tier == TranslationTier.Tier0)
+                {
+                    EmitReadIntFallback(context, size);
+                }
+                else
+                {
+                    EmitReadInt(context, size);
+                }
             }
 
             if (!isSimd)
@@ -95,18 +102,25 @@ namespace ChocolArm64.Instructions
 
             if (isSimd)
             {
-                if (size == 4)
+                if (size != 4)
                 {
-                    EmitWriteVector(context, size);
+                    EmitWriteVectorFallback(context, size);
                 }
                 else
                 {
-                    EmitWriteVectorFallback(context, size);
+                    EmitWriteVector(context, size);
                 }
             }
             else
             {
-                EmitWriteInt(context, size);
+                if (context.Tier == TranslationTier.Tier0)
+                {
+                    EmitWriteIntFallback(context, size);
+                }
+                else
+                {
+                    EmitWriteInt(context, size);
+                }
             }
         }
 
