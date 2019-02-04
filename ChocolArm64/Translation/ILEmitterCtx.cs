@@ -1,5 +1,6 @@
 using ChocolArm64.Decoders;
 using ChocolArm64.Instructions;
+using ChocolArm64.Memory;
 using ChocolArm64.State;
 using System;
 using System.Collections.Generic;
@@ -10,6 +11,8 @@ namespace ChocolArm64.Translation
 {
     class ILEmitterCtx
     {
+        public MemoryManager Memory { get; }
+
         private TranslatorCache _cache;
         private TranslatorQueue _queue;
 
@@ -43,18 +46,30 @@ namespace ChocolArm64.Translation
         //values needed by some functions, since IL doesn't have a swap instruction.
         //You can use any value here as long it doesn't conflict with the indices
         //for the other registers. Any value >= 64 or < 0 will do.
-        private const int IntTmpIndex     = -1;
-        private const int RorTmpIndex     = -2;
-        private const int CmpOptTmp1Index = -3;
-        private const int CmpOptTmp2Index = -4;
-        private const int VecTmp1Index    = -5;
-        private const int VecTmp2Index    = -6;
+        private const int ReservedLocalsCount = 64;
 
-        public ILEmitterCtx(TranslatorCache cache, TranslatorQueue queue, TranslationTier tier, Block graph)
+        private const int RorTmpIndex     = ReservedLocalsCount + 0;
+        private const int CmpOptTmp1Index = ReservedLocalsCount + 1;
+        private const int CmpOptTmp2Index = ReservedLocalsCount + 2;
+        private const int IntTmp1Index    = ReservedLocalsCount + 3;
+        private const int IntTmp2Index    = ReservedLocalsCount + 4;
+        private const int IntTmp3Index    = ReservedLocalsCount + 5;
+
+        //Vectors are part of another "set" of locals.
+        private const int VecTmp1Index = ReservedLocalsCount + 0;
+        private const int VecTmp2Index = ReservedLocalsCount + 1;
+
+        public ILEmitterCtx(
+            MemoryManager   memory,
+            TranslatorCache cache,
+            TranslatorQueue queue,
+            TranslationTier tier,
+            Block           graph)
         {
-            _cache     = cache ?? throw new ArgumentNullException(nameof(cache));
-            _queue     = queue ?? throw new ArgumentNullException(nameof(queue));
-            _currBlock = graph ?? throw new ArgumentNullException(nameof(graph));
+            Memory     = memory ?? throw new ArgumentNullException(nameof(memory));
+            _cache     = cache  ?? throw new ArgumentNullException(nameof(cache));
+            _queue     = queue  ?? throw new ArgumentNullException(nameof(queue));
+            _currBlock = graph  ?? throw new ArgumentNullException(nameof(graph));
 
             Tier = tier;
 
@@ -521,8 +536,14 @@ namespace ChocolArm64.Translation
             _ilBlock.Add(new ILOpCodeStoreState(_ilBlock));
         }
 
-        public void EmitLdtmp() => EmitLdint(IntTmpIndex);
-        public void EmitSttmp() => EmitStint(IntTmpIndex);
+        public void EmitLdtmp() => EmitLdint(IntTmp1Index);
+        public void EmitSttmp() => EmitStint(IntTmp1Index);
+
+        public void EmitLdtmp2() => EmitLdint(IntTmp2Index);
+        public void EmitSttmp2() => EmitStint(IntTmp2Index);
+
+        public void EmitLdtmp3() => EmitLdint(IntTmp3Index);
+        public void EmitSttmp3() => EmitStint(IntTmp3Index);
 
         public void EmitLdvectmp() => EmitLdvec(VecTmp1Index);
         public void EmitStvectmp() => EmitStvec(VecTmp1Index);

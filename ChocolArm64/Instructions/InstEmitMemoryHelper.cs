@@ -1,8 +1,10 @@
 using ChocolArm64.Decoders;
 using ChocolArm64.Memory;
+using ChocolArm64.State;
 using ChocolArm64.Translation;
 using System;
 using System.Reflection.Emit;
+using System.Runtime.Intrinsics.X86;
 
 namespace ChocolArm64.Instructions
 {
@@ -32,9 +34,7 @@ namespace ChocolArm64.Instructions
 
         private static void EmitReadCall(ILEmitterCtx context, Extension ext, int size)
         {
-            bool isSimd = GetIsSimd(context);
-
-            string name = null;
+            bool isSimd = IsSimd(context);
 
             if (size < 0 || size > (isSimd ? 4 : 3))
             {
@@ -43,27 +43,19 @@ namespace ChocolArm64.Instructions
 
             if (isSimd)
             {
-                switch (size)
+                if (size == 4)
                 {
-                    case 0: name = nameof(MemoryManager.ReadVector8);   break;
-                    case 1: name = nameof(MemoryManager.ReadVector16);  break;
-                    case 2: name = nameof(MemoryManager.ReadVector32);  break;
-                    case 3: name = nameof(MemoryManager.ReadVector64);  break;
-                    case 4: name = nameof(MemoryManager.ReadVector128); break;
+                    EmitReadVector(context, size);
+                }
+                else
+                {
+                    EmitReadVectorFallback(context, size);
                 }
             }
             else
             {
-                switch (size)
-                {
-                    case 0: name = nameof(MemoryManager.ReadByte);   break;
-                    case 1: name = nameof(MemoryManager.ReadUInt16); break;
-                    case 2: name = nameof(MemoryManager.ReadUInt32); break;
-                    case 3: name = nameof(MemoryManager.ReadUInt64); break;
-                }
+                EmitReadInt(context, size);
             }
-
-            context.EmitCall(typeof(MemoryManager), name);
 
             if (!isSimd)
             {
@@ -89,9 +81,7 @@ namespace ChocolArm64.Instructions
 
         public static void EmitWriteCall(ILEmitterCtx context, int size)
         {
-            bool isSimd = GetIsSimd(context);
-
-            string name = null;
+            bool isSimd = IsSimd(context);
 
             if (size < 0 || size > (isSimd ? 4 : 3))
             {
@@ -105,34 +95,260 @@ namespace ChocolArm64.Instructions
 
             if (isSimd)
             {
-                switch (size)
+                if (size == 4)
                 {
-                    case 0: name = nameof(MemoryManager.WriteVector8);   break;
-                    case 1: name = nameof(MemoryManager.WriteVector16);  break;
-                    case 2: name = nameof(MemoryManager.WriteVector32);  break;
-                    case 3: name = nameof(MemoryManager.WriteVector64);  break;
-                    case 4: name = nameof(MemoryManager.WriteVector128); break;
+                    EmitWriteVector(context, size);
+                }
+                else
+                {
+                    EmitWriteVectorFallback(context, size);
                 }
             }
             else
             {
-                switch (size)
-                {
-                    case 0: name = nameof(MemoryManager.WriteByte);   break;
-                    case 1: name = nameof(MemoryManager.WriteUInt16); break;
-                    case 2: name = nameof(MemoryManager.WriteUInt32); break;
-                    case 3: name = nameof(MemoryManager.WriteUInt64); break;
-                }
+                EmitWriteInt(context, size);
+            }
+        }
+
+        private static bool IsSimd(ILEmitterCtx context)
+        {
+            return context.CurrOp is IOpCodeSimd64 &&
+                 !(context.CurrOp is OpCodeSimdMemMs64 ||
+                   context.CurrOp is OpCodeSimdMemSs64);
+        }
+
+        private static void EmitReadInt(ILEmitterCtx context, int size)
+        {
+            EmitAddressCheck(context, size);
+
+            ILLabel lblFastPath = new ILLabel();
+            ILLabel lblEnd      = new ILLabel();
+
+            context.Emit(OpCodes.Brfalse_S, lblFastPath);
+
+            EmitReadIntFallback(context, size);
+
+            context.Emit(OpCodes.Br_S, lblEnd);
+
+            context.MarkLabel(lblFastPath);
+
+            context.EmitSttmp2();
+
+            context.Emit(OpCodes.Pop);
+
+            context.EmitLdtmp2();
+
+            EmitPtPointerLoad(context);
+
+            switch (size)
+            {
+                case 0: context.Emit(OpCodes.Ldind_U1); break;
+                case 1: context.Emit(OpCodes.Ldind_U2); break;
+                case 2: context.Emit(OpCodes.Ldind_U4); break;
+                case 3: context.Emit(OpCodes.Ldind_I8); break;
+            }
+
+            context.MarkLabel(lblEnd);
+        }
+
+        private static void EmitReadVector(ILEmitterCtx context, int size)
+        {
+            EmitAddressCheck(context, size);
+
+            ILLabel lblFastPath = new ILLabel();
+            ILLabel lblEnd      = new ILLabel();
+
+            context.Emit(OpCodes.Brfalse_S, lblFastPath);
+
+            EmitReadVectorFallback(context, size);
+
+            context.Emit(OpCodes.Br_S, lblEnd);
+
+            context.MarkLabel(lblFastPath);
+
+            EmitPtPointerLoad(context);
+
+            context.EmitCall(typeof(Sse), nameof(Sse.LoadVector128));
+
+            context.EmitStvectmp();
+
+            context.Emit(OpCodes.Pop);
+
+            context.EmitLdvectmp();
+
+            context.MarkLabel(lblEnd);
+        }
+
+        private static void EmitWriteInt(ILEmitterCtx context, int size)
+        {
+            context.EmitSttmp3();
+
+            EmitAddressCheck(context, size);
+
+            ILLabel lblFastPath = new ILLabel();
+            ILLabel lblEnd      = new ILLabel();
+
+            context.Emit(OpCodes.Brfalse_S, lblFastPath);
+
+            context.EmitLdtmp3();
+
+            EmitWriteIntFallback(context, size);
+
+            context.Emit(OpCodes.Br_S, lblEnd);
+
+            context.MarkLabel(lblFastPath);
+
+            EmitPtPointerLoad(context);
+
+            context.EmitLdtmp3();
+
+            switch (size)
+            {
+                case 0: context.Emit(OpCodes.Stind_I1); break;
+                case 1: context.Emit(OpCodes.Stind_I2); break;
+                case 2: context.Emit(OpCodes.Stind_I4); break;
+                case 3: context.Emit(OpCodes.Stind_I8); break;
+            }
+
+            context.Emit(OpCodes.Pop);
+
+            context.MarkLabel(lblEnd);
+        }
+
+        private static void EmitWriteVector(ILEmitterCtx context, int size)
+        {
+            context.EmitStvectmp();
+
+            EmitAddressCheck(context, size);
+
+            ILLabel lblFastPath = new ILLabel();
+            ILLabel lblEnd      = new ILLabel();
+
+            context.Emit(OpCodes.Brfalse_S, lblFastPath);
+
+            context.EmitLdvectmp();
+
+            EmitWriteVectorFallback(context, size);
+
+            context.Emit(OpCodes.Br_S, lblEnd);
+
+            context.MarkLabel(lblFastPath);
+
+            EmitPtPointerLoad(context);
+
+            context.EmitLdvectmp();
+
+            context.EmitCall(typeof(Sse), nameof(Sse.Store));
+
+            context.Emit(OpCodes.Pop);
+
+            context.MarkLabel(lblEnd);
+        }
+
+        private static void EmitAddressCheck(ILEmitterCtx context, int size)
+        {
+            long addressCheckMask = ~(context.Memory.AddressSpaceSize - 1);
+
+            addressCheckMask |= (1u << size) - 1;
+
+            context.Emit(OpCodes.Dup);
+
+            context.EmitLdc_I(addressCheckMask);
+
+            context.Emit(OpCodes.And);
+        }
+
+        private static unsafe void EmitPtPointerLoad(ILEmitterCtx context)
+        {
+            context.EmitSttmp2();
+            context.EmitLdtmp2();
+
+            context.EmitLsr(MemoryManager.PageBits);
+
+            context.EmitLdc_I(IntPtr.Size);
+
+            context.Emit(OpCodes.Mul);
+
+            if (context.CurrOp.RegisterSize == RegisterSize.Int32)
+            {
+                context.Emit(OpCodes.Conv_U8);
+            }
+
+            context.EmitLdc_I8((long)context.Memory.PageTable);
+
+            context.Emit(OpCodes.Add);
+            context.Emit(OpCodes.Conv_I);
+            context.Emit(OpCodes.Ldind_I);
+
+            context.EmitLdtmp2();
+
+            context.EmitLdc_I(MemoryManager.PageMask);
+
+            context.Emit(OpCodes.And);
+            context.Emit(OpCodes.Conv_I);
+            context.Emit(OpCodes.Add);
+        }
+
+        private static void EmitReadIntFallback(ILEmitterCtx context, int size)
+        {
+            string fallbackMethodName = null;
+
+            switch (size)
+            {
+                case 0: fallbackMethodName = nameof(MemoryManager.ReadByte);   break;
+                case 1: fallbackMethodName = nameof(MemoryManager.ReadUInt16); break;
+                case 2: fallbackMethodName = nameof(MemoryManager.ReadUInt32); break;
+                case 3: fallbackMethodName = nameof(MemoryManager.ReadUInt64); break;
+            }
+
+            context.EmitCall(typeof(MemoryManager), fallbackMethodName);
+        }
+
+        private static void EmitWriteIntFallback(ILEmitterCtx context, int size)
+        {
+            string fallbackMethodName = null;
+
+            switch (size)
+            {
+                case 0: fallbackMethodName = nameof(MemoryManager.WriteByte);   break;
+                case 1: fallbackMethodName = nameof(MemoryManager.WriteUInt16); break;
+                case 2: fallbackMethodName = nameof(MemoryManager.WriteUInt32); break;
+                case 3: fallbackMethodName = nameof(MemoryManager.WriteUInt64); break;
+            }
+
+            context.EmitCall(typeof(MemoryManager), fallbackMethodName);
+        }
+
+        private static void EmitReadVectorFallback(ILEmitterCtx context, int size)
+        {
+            string name = null;
+
+            switch (size)
+            {
+                case 0: name = nameof(MemoryManager.ReadVector8);   break;
+                case 1: name = nameof(MemoryManager.ReadVector16);  break;
+                case 2: name = nameof(MemoryManager.ReadVector32);  break;
+                case 3: name = nameof(MemoryManager.ReadVector64);  break;
+                case 4: name = nameof(MemoryManager.ReadVector128); break;
             }
 
             context.EmitCall(typeof(MemoryManager), name);
         }
 
-        private static bool GetIsSimd(ILEmitterCtx context)
+        private static void EmitWriteVectorFallback(ILEmitterCtx context, int size)
         {
-            return context.CurrOp is IOpCodeSimd64 &&
-                 !(context.CurrOp is OpCodeSimdMemMs64 ||
-                   context.CurrOp is OpCodeSimdMemSs64);
+            string fallbackMethodName = null;
+
+            switch (size)
+            {
+                case 0: fallbackMethodName = nameof(MemoryManager.WriteVector8);   break;
+                case 1: fallbackMethodName = nameof(MemoryManager.WriteVector16);  break;
+                case 2: fallbackMethodName = nameof(MemoryManager.WriteVector32);  break;
+                case 3: fallbackMethodName = nameof(MemoryManager.WriteVector64);  break;
+                case 4: fallbackMethodName = nameof(MemoryManager.WriteVector128); break;
+            }
+
+            context.EmitCall(typeof(MemoryManager), fallbackMethodName);
         }
     }
 }
