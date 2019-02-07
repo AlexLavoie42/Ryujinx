@@ -5,6 +5,13 @@ namespace ChocolArm64.Translation
 {
     class LocalAlloc
     {
+        public const long CallerSavedIntRegistersMask = 0x7fL  << 9;
+        public const long CalleeSavedIntRegistersMask = 0x3ffL << 19;
+        public const long PStateNzcvFlagsMask         = 0xfL   << 60;
+
+        public const long CallerSavedVecRegistersMask = 0xffffL << 16;
+        public const long CalleeSavedVecRegistersMask = 0xffL   << 8;
+
         private class PathIo
         {
             private Dictionary<ILBlock, long> _allInputs;
@@ -57,15 +64,40 @@ namespace ChocolArm64.Translation
         private Dictionary<ILBlock, PathIo> _intPaths;
         private Dictionary<ILBlock, PathIo> _vecPaths;
 
+        private HashSet<ILBlock> _entryBlocks;
+
         private struct BlockIo
         {
-            public ILBlock Block;
-            public ILBlock Entry;
+            public ILBlock Block { get; }
+            public ILBlock Entry { get; }
 
-            public long IntInputs;
-            public long VecInputs;
-            public long IntOutputs;
-            public long VecOutputs;
+            public long IntInputs  { get; set; }
+            public long VecInputs  { get; set; }
+            public long IntOutputs { get; set; }
+            public long VecOutputs { get; set; }
+
+            public BlockIo(ILBlock block, ILBlock entry)
+            {
+                Block = block;
+                Entry = entry;
+
+                IntInputs = IntOutputs = 0;
+                VecInputs = VecOutputs = 0;
+            }
+
+            public BlockIo(
+                ILBlock block,
+                ILBlock entry,
+                long    intInputs,
+                long    vecInputs,
+                long    intOutputs,
+                long    vecOutputs) : this(block, entry)
+            {
+                IntInputs  = intInputs;
+                VecInputs  = vecInputs;
+                IntOutputs = intOutputs;
+                VecOutputs = vecOutputs;
+            }
 
             public override bool Equals(object obj)
             {
@@ -98,25 +130,15 @@ namespace ChocolArm64.Translation
             }
         }
 
-        private const int MaxOptGraphLength = 40;
-
-        public LocalAlloc(ILBlock[] graph, ILBlock entry)
+        public LocalAlloc()
         {
             _intPaths = new Dictionary<ILBlock, PathIo>();
             _vecPaths = new Dictionary<ILBlock, PathIo>();
 
-            if (graph.Length > 1 &&
-                graph.Length < MaxOptGraphLength)
-            {
-                InitializeOptimal(graph, entry);
-            }
-            else
-            {
-                InitializeFast(graph);
-            }
+            _entryBlocks = new HashSet<ILBlock>();
         }
 
-        private void InitializeOptimal(ILBlock[] graph, ILBlock entry)
+        public void BuildUses(ILBlock entry)
         {
             //This will go through all possible paths on the graph,
             //and store all inputs/outputs for each block. A register
@@ -133,19 +155,15 @@ namespace ChocolArm64.Translation
 
             void Enqueue(BlockIo block)
             {
-                if (!visited.Contains(block))
+                if (visited.Add(block))
                 {
                     unvisited.Enqueue(block);
-
-                    visited.Add(block);
                 }
             }
 
-            Enqueue(new BlockIo()
-            {
-                Block = entry,
-                Entry = entry
-            });
+            _entryBlocks.Add(entry);
+
+            Enqueue(new BlockIo(entry, entry));
 
             while (unvisited.Count > 0)
             {
@@ -177,19 +195,23 @@ namespace ChocolArm64.Translation
 
                 void EnqueueFromCurrent(ILBlock block, bool retTarget)
                 {
-                    BlockIo blockIo = new BlockIo() { Block = block };
+                    BlockIo blockIo;
 
                     if (retTarget)
                     {
-                        blockIo.Entry = block;
+                        blockIo = new BlockIo(block, block);
+
+                        _entryBlocks.Add(block);
                     }
                     else
                     {
-                        blockIo.Entry      = current.Entry;
-                        blockIo.IntInputs  = current.IntInputs;
-                        blockIo.VecInputs  = current.VecInputs;
-                        blockIo.IntOutputs = current.IntOutputs;
-                        blockIo.VecOutputs = current.VecOutputs;
+                        blockIo = new BlockIo(
+                            block,
+                            current.Entry,
+                            current.IntInputs,
+                            current.VecInputs,
+                            current.IntOutputs,
+                            current.VecOutputs);
                     }
 
                     Enqueue(blockIo);
@@ -207,36 +229,19 @@ namespace ChocolArm64.Translation
             }
         }
 
-        private void InitializeFast(ILBlock[] graph)
+        public long GetIntInputsCombined() => GetInputsCombined(isVec: false);
+        public long GetVecInputsCombined() => GetInputsCombined(isVec: true);
+
+        private long GetInputsCombined(bool isVec)
         {
-            //This is WAY faster than InitializeOptimal, but results in
-            //unneeded loads and stores, so the resulting code will be slower.
-            long intInputs = 0, intOutputs = 0;
-            long vecInputs = 0, vecOutputs = 0;
+            long inputs = 0;
 
-            foreach (ILBlock block in graph)
+            foreach (ILBlock block in _entryBlocks)
             {
-                intInputs  |= block.IntInputs;
-                intOutputs |= block.IntOutputs;
-                vecInputs  |= block.VecInputs;
-                vecOutputs |= block.VecOutputs;
+                inputs |= GetInputsImpl(block, isVec ? _vecPaths.Values : _intPaths.Values);
             }
 
-            //It's possible that not all code paths writes to those output registers,
-            //in those cases if we attempt to write an output registers that was
-            //not written, we will be just writing zero and messing up the old register value.
-            //So we just need to ensure that all outputs are loaded.
-            if (graph.Length > 1)
-            {
-                intInputs |= intOutputs;
-                vecInputs |= vecOutputs;
-            }
-
-            foreach (ILBlock block in graph)
-            {
-                _intPaths.Add(block, new PathIo(block, intInputs, intOutputs));
-                _vecPaths.Add(block, new PathIo(block, vecInputs, vecOutputs));
-            }
+            return inputs;
         }
 
         public long GetIntInputs(ILBlock root) => GetInputsImpl(root, _intPaths.Values);
@@ -256,5 +261,22 @@ namespace ChocolArm64.Translation
 
         public long GetIntOutputs(ILBlock block) => _intPaths[block].GetOutputs();
         public long GetVecOutputs(ILBlock block) => _vecPaths[block].GetOutputs();
+
+        public static long ClearAbiCompliantIntMask(long mask)
+        {
+            mask &= ~CallerSavedIntRegistersMask;
+            mask &= ~CalleeSavedIntRegistersMask;
+            mask &= ~PStateNzcvFlagsMask;
+
+            return mask;
+        }
+
+        public static long ClearAbiCompliantVecMask(long mask)
+        {
+            mask &= ~CallerSavedVecRegistersMask;
+            mask &= ~CalleeSavedVecRegistersMask;
+
+            return mask;
+        }
     }
 }

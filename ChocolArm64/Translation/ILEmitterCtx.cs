@@ -31,6 +31,8 @@ namespace ChocolArm64.Translation
 
         public Aarch32Mode Mode { get; } = Aarch32Mode.User; //TODO
 
+        public bool HasIndirectJump { get; set; }
+
         private Dictionary<Block, ILBlock> _visitedBlocks;
 
         private Queue<Block> _branchTargets;
@@ -87,7 +89,12 @@ namespace ChocolArm64.Translation
 
             ResetBlockState();
 
-            AdvanceOpCode();
+            if (AdvanceOpCode())
+            {
+                EmitSynchronization();
+
+                _ilBlock.Add(new ILOpCodeLoadState(_ilBlock, isSubEntry: true));
+            }
         }
 
         public ILBlock[] GetILBlocks()
@@ -113,10 +120,18 @@ namespace ChocolArm64.Translation
                 return;
             }
 
-            if (_opcIndex == 0)
+            int opcIndex = _opcIndex;
+
+            if (opcIndex == 0)
             {
                 MarkLabel(GetLabel(_currBlock.Position));
+            }
 
+            bool isLastOp = opcIndex == CurrBlock.OpCodes.Count - 1;
+
+            if (isLastOp && CurrBlock.Branch != null &&
+                     (ulong)CurrBlock.Branch.Position <= (ulong)CurrBlock.Position)
+            {
                 EmitSynchronization();
             }
 
@@ -147,7 +162,7 @@ namespace ChocolArm64.Translation
                 //of the next instruction to be executed (in the case that the condition
                 //is false, and the branch was not taken, as all basic blocks should end with
                 //some kind of branch).
-                if (CurrOp == CurrBlock.GetLastOp() && CurrBlock.Next == null)
+                if (isLastOp && CurrBlock.Next == null)
                 {
                     EmitStoreState();
                     EmitLdc_I8(CurrOp.Position + CurrOp.OpCodeSizeInBytes);
@@ -271,7 +286,7 @@ namespace ChocolArm64.Translation
                 return;
             }
 
-            _queue.Enqueue(new TranslatorQueueItem(position, mode, TranslationTier.Tier1));
+            _queue.Enqueue(new TranslatorQueueItem(position, mode, TranslationTier.Tier1, isComplete: true));
         }
 
         public bool TryOptEmitSubroutineCall()
