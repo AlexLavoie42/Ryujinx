@@ -70,7 +70,14 @@ namespace ChocolArm64.Memory
                 AllocationType.Reserve |
                 AllocationType.Commit;
 
-            return VirtualAlloc(IntPtr.Zero, size, flags, MemoryProtection.ReadWrite);
+            IntPtr ptr = VirtualAlloc(IntPtr.Zero, size, flags, MemoryProtection.ReadWrite);
+
+            if (ptr == IntPtr.Zero)
+            {
+                throw new OutOfMemoryException();
+            }
+
+            return ptr;
         }
 
         public static IntPtr AllocateWriteTracked(IntPtr size)
@@ -80,7 +87,14 @@ namespace ChocolArm64.Memory
                 AllocationType.Commit  |
                 AllocationType.WriteWatch;
 
-            return VirtualAlloc(IntPtr.Zero, size, flags, MemoryProtection.ReadWrite);
+            IntPtr ptr = VirtualAlloc(IntPtr.Zero, size, flags, MemoryProtection.ReadWrite);
+
+            if (ptr == IntPtr.Zero)
+            {
+                throw new OutOfMemoryException();
+            }
+
+            return ptr;
         }
 
         public static bool Free(IntPtr address)

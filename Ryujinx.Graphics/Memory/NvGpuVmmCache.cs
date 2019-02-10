@@ -37,8 +37,6 @@ namespace Ryujinx.Graphics.Memory
 
             long cachedPagesCount = 0;
 
-            int index = 0;
-
             while (va < endAddr)
             {
                 long page = _memory.GetPhysicalAddress(va) >> PageBits;
@@ -55,8 +53,6 @@ namespace Ryujinx.Graphics.Memory
                 {
                     CachedPages[page].Clear();
                 }
-
-                index++;
 
                 if (dictionary.TryGetValue(pa, out int currBuffMask))
                 {

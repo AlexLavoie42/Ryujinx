@@ -14,20 +14,9 @@ namespace ChocolArm64.Memory
 {
     public unsafe class MemoryManager : IMemory, IDisposable
     {
-        private const int PtLvl0Bits = 13;
-        private const int PtLvl1Bits = 14;
-        public  const int PageBits   = 12;
-
-        private const int PtLvl0Size = 1 << PtLvl0Bits;
-        private const int PtLvl1Size = 1 << PtLvl1Bits;
-        public  const int PageSize   = 1 << PageBits;
-
-        private const int PtLvl0Mask = PtLvl0Size - 1;
-        private const int PtLvl1Mask = PtLvl1Size - 1;
-        public  const int PageMask   = PageSize   - 1;
-
-        private const int PtLvl0Bit = PageBits + PtLvl1Bits;
-        private const int PtLvl1Bit = PageBits;
+        public const int PageBits = 12;
+        public const int PageSize = 1 << PageBits;
+        public const int PageMask = PageSize   - 1;
 
         private const long ErgMask = (4 << CpuThreadState.ErgSizeLog2) - 1;
 
@@ -232,7 +221,7 @@ namespace ChocolArm64.Memory
 
         public bool IsValidPosition(long position)
         {
-            return position >> (PtLvl0Bits + PtLvl1Bits + PageBits) == 0;
+            return (ulong)position <= (ulong)AddressSpaceSize;
         }
 
         public void RemoveMonitor(int core)
