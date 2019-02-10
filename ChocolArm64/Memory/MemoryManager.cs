@@ -139,6 +139,8 @@ namespace ChocolArm64.Memory
 
             long pages = size / PageSize;
 
+            bool modified = false;
+
             bool IsAnyPageModified()
             {
                 IntPtr pendingSize = new IntPtr(pendingPages * PageSize);
@@ -161,10 +163,7 @@ namespace ChocolArm64.Memory
             {
                 if (address != expectedAddr)
                 {
-                    if (IsAnyPageModified())
-                    {
-                        return true;
-                    }
+                    modified |= IsAnyPageModified();
 
                     baseAddr = address;
 
@@ -175,12 +174,22 @@ namespace ChocolArm64.Memory
 
                 pendingPages++;
 
+                if (pages == 0)
+                {
+                    break;
+                }
+
                 position += PageSize;
 
                 address = Translate(position);
             }
 
-            return IsAnyPageModified();
+            if (pendingPages != 0)
+            {
+                modified |= IsAnyPageModified();
+            }
+
+            return modified;
         }
 
         public bool TryGetHostAddress(long position, long size, out IntPtr ptr)

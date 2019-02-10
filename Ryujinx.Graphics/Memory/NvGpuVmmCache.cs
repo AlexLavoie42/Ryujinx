@@ -25,6 +25,8 @@ namespace Ryujinx.Graphics.Memory
         {
             long va = position;
 
+            long pa = _memory.GetPhysicalAddress(va);
+
             long endAddr = (va + size + PageMask) & ~PageMask;
 
             long addrTruncated = va & ~PageMask;
@@ -35,11 +37,11 @@ namespace Ryujinx.Graphics.Memory
 
             long cachedPagesCount = 0;
 
+            int index = 0;
+
             while (va < endAddr)
             {
-                long pa = _memory.GetPhysicalAddress(va);
-
-                long page = pa >> PageBits;
+                long page = _memory.GetPhysicalAddress(va) >> PageBits;
 
                 ConcurrentDictionary<long, int> dictionary = CachedPages[page];
 
@@ -53,6 +55,8 @@ namespace Ryujinx.Graphics.Memory
                 {
                     CachedPages[page].Clear();
                 }
+
+                index++;
 
                 if (dictionary.TryGetValue(pa, out int currBuffMask))
                 {
@@ -73,7 +77,7 @@ namespace Ryujinx.Graphics.Memory
                 va += PageSize;
             }
 
-            return cachedPagesCount != (endAddr - position + PageMask) >> PageBits;
+            return cachedPagesCount != (endAddr - addrTruncated) >> PageBits;
         }
     }
 }
