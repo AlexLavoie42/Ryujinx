@@ -10,6 +10,11 @@ namespace ChocolArm64.Instructions
 {
     static class InstEmitMemoryHelper
     {
+        //Temporary locals usage:
+        //Temp2 contains the address.
+        //Temp3/VecTemp2 contains the value (for writes).
+        //Temp1 is used by the caller, Temp4 is free to be used here.
+
         private enum Extension
         {
             Zx,
@@ -34,6 +39,9 @@ namespace ChocolArm64.Instructions
 
         private static void EmitReadCall(ILEmitterCtx context, Extension ext, int size)
         {
+            //Save the address into a temp.
+            context.EmitSttmp2();
+
             bool isSimd = IsSimd(context);
 
             if (size < 0 || size > (isSimd ? 4 : 3))
@@ -90,14 +98,22 @@ namespace ChocolArm64.Instructions
         {
             bool isSimd = IsSimd(context);
 
+            //Save the value into a temp.
+            if (isSimd)
+            {
+                context.EmitStvectmp2();
+            }
+            else
+            {
+                context.EmitSttmp3();
+            }
+
+            //Save the address into a temp.
+            context.EmitSttmp2();
+
             if (size < 0 || size > (isSimd ? 4 : 3))
             {
                 throw new ArgumentOutOfRangeException(nameof(size));
-            }
-
-            if (size < 3 && !isSimd)
-            {
-                context.Emit(OpCodes.Conv_I4);
             }
 
             if (isSimd)
@@ -136,9 +152,12 @@ namespace ChocolArm64.Instructions
             EmitAddressCheck(context, size);
 
             ILLabel lblFastPath = new ILLabel();
+            ILLabel lblSlowPath = new ILLabel();
             ILLabel lblEnd      = new ILLabel();
 
             context.Emit(OpCodes.Brfalse_S, lblFastPath);
+
+            context.MarkLabel(lblSlowPath);
 
             EmitReadIntFallback(context, size);
 
@@ -146,7 +165,7 @@ namespace ChocolArm64.Instructions
 
             context.MarkLabel(lblFastPath);
 
-            EmitPtPointerLoad(context);
+            EmitPtPointerLoad(context, lblSlowPath);
 
             switch (size)
             {
@@ -164,9 +183,12 @@ namespace ChocolArm64.Instructions
             EmitAddressCheck(context, size);
 
             ILLabel lblFastPath = new ILLabel();
+            ILLabel lblSlowPath = new ILLabel();
             ILLabel lblEnd      = new ILLabel();
 
             context.Emit(OpCodes.Brfalse_S, lblFastPath);
+
+            context.MarkLabel(lblSlowPath);
 
             EmitReadVectorFallback(context, size);
 
@@ -174,7 +196,7 @@ namespace ChocolArm64.Instructions
 
             context.MarkLabel(lblFastPath);
 
-            EmitPtPointerLoad(context);
+            EmitPtPointerLoad(context, lblSlowPath);
 
             context.EmitCall(typeof(Sse), nameof(Sse.LoadVector128));
 
@@ -183,16 +205,15 @@ namespace ChocolArm64.Instructions
 
         private static void EmitWriteInt(ILEmitterCtx context, int size)
         {
-            context.EmitSttmp3();
-
             EmitAddressCheck(context, size);
 
             ILLabel lblFastPath = new ILLabel();
+            ILLabel lblSlowPath = new ILLabel();
             ILLabel lblEnd      = new ILLabel();
 
             context.Emit(OpCodes.Brfalse_S, lblFastPath);
 
-            context.EmitLdtmp3();
+            context.MarkLabel(lblSlowPath);
 
             EmitWriteIntFallback(context, size);
 
@@ -200,9 +221,14 @@ namespace ChocolArm64.Instructions
 
             context.MarkLabel(lblFastPath);
 
-            EmitPtPointerLoad(context);
+            EmitPtPointerLoad(context, lblSlowPath);
 
             context.EmitLdtmp3();
+
+            if (size < 3)
+            {
+                context.Emit(OpCodes.Conv_U4);
+            }
 
             switch (size)
             {
@@ -217,16 +243,15 @@ namespace ChocolArm64.Instructions
 
         private static void EmitWriteVector(ILEmitterCtx context, int size)
         {
-            context.EmitStvectmp();
-
             EmitAddressCheck(context, size);
 
             ILLabel lblFastPath = new ILLabel();
+            ILLabel lblSlowPath = new ILLabel();
             ILLabel lblEnd      = new ILLabel();
 
             context.Emit(OpCodes.Brfalse_S, lblFastPath);
 
-            context.EmitLdvectmp();
+            context.MarkLabel(lblSlowPath);
 
             EmitWriteVectorFallback(context, size);
 
@@ -234,9 +259,9 @@ namespace ChocolArm64.Instructions
 
             context.MarkLabel(lblFastPath);
 
-            EmitPtPointerLoad(context);
+            EmitPtPointerLoad(context, lblSlowPath);
 
-            context.EmitLdvectmp();
+            context.EmitLdvectmp2();
 
             context.EmitCall(typeof(Sse), nameof(Sse.Store));
 
@@ -249,19 +274,15 @@ namespace ChocolArm64.Instructions
 
             addressCheckMask |= (1u << size) - 1;
 
-            context.Emit(OpCodes.Dup);
+            context.EmitLdtmp2();
 
             context.EmitLdc_I(addressCheckMask);
 
             context.Emit(OpCodes.And);
         }
 
-        private static unsafe void EmitPtPointerLoad(ILEmitterCtx context)
+        private static void EmitPtPointerLoad(ILEmitterCtx context, ILLabel lblFallbackPath)
         {
-            context.EmitSttmp2();
-
-            context.Emit(OpCodes.Pop);
-
             context.EmitLdtmp2();
 
             context.EmitLsr(MemoryManager.PageBits);
@@ -275,11 +296,29 @@ namespace ChocolArm64.Instructions
                 context.Emit(OpCodes.Conv_U8);
             }
 
-            context.EmitLdc_I8((long)context.Memory.PageTable);
+            context.EmitLdc_I8(context.Memory.PageTable.ToInt64());
 
             context.Emit(OpCodes.Add);
             context.Emit(OpCodes.Conv_I);
             context.Emit(OpCodes.Ldind_I);
+
+            if (!context.Memory.HasWriteWatchSupport)
+            {
+                context.Emit(OpCodes.Conv_U8);
+
+                context.EmitSttmp4();
+                context.EmitLdtmp4();
+
+                context.EmitLdc_I8(MemoryManager.PteFlagsMask);
+
+                context.Emit(OpCodes.And);
+
+                context.Emit(OpCodes.Brtrue, lblFallbackPath);
+
+                context.EmitLdtmp4();
+
+                context.Emit(OpCodes.Conv_I);
+            }
 
             context.EmitLdtmp2();
 
@@ -292,6 +331,9 @@ namespace ChocolArm64.Instructions
 
         private static void EmitReadIntFallback(ILEmitterCtx context, int size)
         {
+            context.EmitLdarg(TranslatedSub.MemoryArgIdx);
+            context.EmitLdtmp2();
+
             string fallbackMethodName = null;
 
             switch (size)
@@ -305,8 +347,36 @@ namespace ChocolArm64.Instructions
             context.EmitCall(typeof(MemoryManager), fallbackMethodName);
         }
 
+        private static void EmitReadVectorFallback(ILEmitterCtx context, int size)
+        {
+            context.EmitLdarg(TranslatedSub.MemoryArgIdx);
+            context.EmitLdtmp2();
+
+            string fallbackMethodName = null;
+
+            switch (size)
+            {
+                case 0: fallbackMethodName = nameof(MemoryManager.ReadVector8);   break;
+                case 1: fallbackMethodName = nameof(MemoryManager.ReadVector16);  break;
+                case 2: fallbackMethodName = nameof(MemoryManager.ReadVector32);  break;
+                case 3: fallbackMethodName = nameof(MemoryManager.ReadVector64);  break;
+                case 4: fallbackMethodName = nameof(MemoryManager.ReadVector128); break;
+            }
+
+            context.EmitCall(typeof(MemoryManager), fallbackMethodName);
+        }
+
         private static void EmitWriteIntFallback(ILEmitterCtx context, int size)
         {
+            context.EmitLdarg(TranslatedSub.MemoryArgIdx);
+            context.EmitLdtmp2();
+            context.EmitLdtmp3();
+
+            if (size < 3)
+            {
+                context.Emit(OpCodes.Conv_U4);
+            }
+
             string fallbackMethodName = null;
 
             switch (size)
@@ -320,24 +390,12 @@ namespace ChocolArm64.Instructions
             context.EmitCall(typeof(MemoryManager), fallbackMethodName);
         }
 
-        private static void EmitReadVectorFallback(ILEmitterCtx context, int size)
-        {
-            string name = null;
-
-            switch (size)
-            {
-                case 0: name = nameof(MemoryManager.ReadVector8);   break;
-                case 1: name = nameof(MemoryManager.ReadVector16);  break;
-                case 2: name = nameof(MemoryManager.ReadVector32);  break;
-                case 3: name = nameof(MemoryManager.ReadVector64);  break;
-                case 4: name = nameof(MemoryManager.ReadVector128); break;
-            }
-
-            context.EmitCall(typeof(MemoryManager), name);
-        }
-
         private static void EmitWriteVectorFallback(ILEmitterCtx context, int size)
         {
+            context.EmitLdarg(TranslatedSub.MemoryArgIdx);
+            context.EmitLdtmp2();
+            context.EmitLdvectmp2();
+
             string fallbackMethodName = null;
 
             switch (size)

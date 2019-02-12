@@ -54,6 +54,7 @@ namespace ChocolArm64.Translation
         private const int IntTmp1Index    = ReservedLocalsCount + 3;
         private const int IntTmp2Index    = ReservedLocalsCount + 4;
         private const int IntTmp3Index    = ReservedLocalsCount + 5;
+        private const int IntTmp4Index    = ReservedLocalsCount + 6;
 
         //Vectors are part of another "set" of locals.
         private const int VecTmp1Index = ReservedLocalsCount + 0;
@@ -544,6 +545,9 @@ namespace ChocolArm64.Translation
 
         public void EmitLdtmp3() => EmitLdint(IntTmp3Index);
         public void EmitSttmp3() => EmitStint(IntTmp3Index);
+
+        public void EmitLdtmp4() => EmitLdint(IntTmp4Index);
+        public void EmitSttmp4() => EmitStint(IntTmp4Index);
 
         public void EmitLdvectmp() => EmitLdvec(VecTmp1Index);
         public void EmitStvectmp() => EmitStvec(VecTmp1Index);

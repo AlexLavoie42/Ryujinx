@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 
 namespace ChocolArm64.Memory
 {
-    public static class MemoryAllocWindows
+    static class MemoryAllocWindows
     {
         [Flags]
         private enum AllocationType : uint

@@ -8,7 +8,7 @@ using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
 using System.Threading;
 
-using static ChocolArm64.Memory.MemoryAllocWindows;
+using static ChocolArm64.Memory.MemoryAlloc;
 
 namespace ChocolArm64.Memory
 {
@@ -16,7 +16,11 @@ namespace ChocolArm64.Memory
     {
         public const int PageBits = 12;
         public const int PageSize = 1 << PageBits;
-        public const int PageMask = PageSize   - 1;
+        public const int PageMask = PageSize - 1;
+
+        private const long PteFlagNotModified = 1;
+
+        internal const long PteFlagsMask = 7;
 
         private const long ErgMask = (4 << CpuThreadState.ErgSizeLog2) - 1;
 
@@ -40,6 +44,8 @@ namespace ChocolArm64.Memory
         private IntPtr _pageTable;
 
         internal IntPtr PageTable => _pageTable;
+
+        public bool HasWriteWatchSupport => MemoryAlloc.HasWriteWatchSupport;
 
         public long AddressSpaceSize { get; }
 
@@ -80,14 +86,55 @@ namespace ChocolArm64.Memory
             return (long)(ptr - _ramPtr);
         }
 
-        internal IntPtr Translate(long position)
+        private IntPtr Translate(long position)
         {
             if (!IsValidPosition(position))
             {
                 return IntPtr.Zero;
             }
 
-            return new IntPtr(((byte**)_pageTable)[position >> PageBits] + (position & PageMask));
+            byte* ptr = ((byte**)_pageTable)[position >> PageBits];
+
+            IntPtr* pt = (IntPtr*)_pageTable;
+
+            ulong ptrUlong = (ulong)ptr;
+
+            long ptrLong = (long)ptr;
+
+            if ((ptrUlong & PteFlagsMask) != 0)
+            {
+                ptrUlong &= ~(ulong)PteFlagsMask;
+
+                ptr = (byte*)ptrUlong;
+            }
+
+            return new IntPtr(ptr + (position & PageMask));
+        }
+
+        private IntPtr TranslateForWrite(long position)
+        {
+            if (!IsValidPosition(position))
+            {
+                return IntPtr.Zero;
+            }
+
+            byte* ptr = ((byte**)_pageTable)[position >> PageBits];
+
+            ulong ptrUlong = (ulong)ptr;
+
+            if ((ptrUlong & PteFlagsMask) != 0)
+            {
+                if ((ptrUlong & PteFlagNotModified) != 0)
+                {
+                    ClearPtEntryFlag(position, PteFlagNotModified);
+                }
+
+                ptrUlong &= ~(ulong)PteFlagsMask;
+
+                ptr = (byte*)ptrUlong;
+            }
+
+            return new IntPtr(ptr + (position & PageMask));
         }
 
         private void SetPtEntries(long va, byte* ptr, long size)
@@ -117,8 +164,44 @@ namespace ChocolArm64.Memory
             ((byte**)_pageTable)[position >> PageBits] = ptr;
         }
 
+        private void SetPtEntryFlag(long position, long flag)
+        {
+            ModifyPtEntryFlag(position, flag, setFlag: true);
+        }
+
+        private void ClearPtEntryFlag(long position, long flag)
+        {
+            ModifyPtEntryFlag(position, flag, setFlag: false);
+        }
+
+        private void ModifyPtEntryFlag(long position, long flag, bool setFlag)
+        {
+            IntPtr* pt = (IntPtr*)_pageTable;
+
+            while (true)
+            {
+                IntPtr old = pt[position >> PageBits];
+
+                IntPtr modified = setFlag
+                    ? new IntPtr(old.ToInt64() |  flag)
+                    : new IntPtr(old.ToInt64() & ~flag);
+
+                IntPtr origValue = Interlocked.CompareExchange(ref pt[position >> PageBits], modified, old);
+
+                if (origValue == old)
+                {
+                    break;
+                }
+            }
+        }
+
         public bool IsRegionModified(long position, long size)
         {
+            if (!HasWriteWatchSupport)
+            {
+                return IsRegionModifiedFallback(position, size);
+            }
+
             IntPtr address = Translate(position);
 
             IntPtr baseAddr     = address;
@@ -136,7 +219,7 @@ namespace ChocolArm64.Memory
 
                 IntPtr[] addresses = new IntPtr[pendingPages];
 
-                bool result = MemoryAllocWindows.GetModifiedPages(baseAddr, pendingSize, addresses, out ulong count);
+                bool result = GetModifiedPages(baseAddr, pendingSize, addresses, out ulong count);
 
                 if (result)
                 {
@@ -176,6 +259,38 @@ namespace ChocolArm64.Memory
             if (pendingPages != 0)
             {
                 modified |= IsAnyPageModified();
+            }
+
+            return modified;
+        }
+
+        private unsafe bool IsRegionModifiedFallback(long position, long size)
+        {
+            long endAddr = (position + size + PageMask) & ~PageMask;
+
+            bool modified = false;
+
+            while ((ulong)position < (ulong)endAddr)
+            {
+                if (IsValidPosition(position))
+                {
+                    byte* ptr = ((byte**)_pageTable)[position >> PageBits];
+
+                    ulong ptrUlong = (ulong)ptr;
+
+                    if ((ptrUlong & PteFlagNotModified) == 0)
+                    {
+                        modified = true;
+
+                        SetPtEntryFlag(position, PteFlagNotModified);
+                    }
+                }
+                else
+                {
+                    modified = true;
+                }
+
+                position += PageSize;
             }
 
             return modified;
@@ -568,14 +683,14 @@ namespace ChocolArm64.Memory
 
         public void WriteByte(long position, byte value)
         {
-            *((byte*)Translate(position)) = value;
+            *((byte*)TranslateForWrite(position)) = value;
         }
 
         public void WriteUInt16(long position, ushort value)
         {
             if ((position & 1) == 0)
             {
-                *((ushort*)Translate(position)) = value;
+                *((ushort*)TranslateForWrite(position)) = value;
             }
             else
             {
@@ -588,7 +703,7 @@ namespace ChocolArm64.Memory
         {
             if ((position & 3) == 0)
             {
-                *((uint*)Translate(position)) = value;
+                *((uint*)TranslateForWrite(position)) = value;
             }
             else
             {
@@ -601,7 +716,7 @@ namespace ChocolArm64.Memory
         {
             if ((position & 7) == 0)
             {
-                *((ulong*)Translate(position)) = value;
+                *((ulong*)TranslateForWrite(position)) = value;
             }
             else
             {
@@ -645,7 +760,7 @@ namespace ChocolArm64.Memory
         {
             if (Sse.IsSupported && (position & 3) == 0)
             {
-                Sse.StoreScalar((float*)Translate(position), value);
+                Sse.StoreScalar((float*)TranslateForWrite(position), value);
             }
             else
             {
@@ -658,7 +773,7 @@ namespace ChocolArm64.Memory
         {
             if (Sse2.IsSupported && (position & 7) == 0)
             {
-                Sse2.StoreScalar((double*)Translate(position), Sse.StaticCast<float, double>(value));
+                Sse2.StoreScalar((double*)TranslateForWrite(position), Sse.StaticCast<float, double>(value));
             }
             else
             {
@@ -671,7 +786,7 @@ namespace ChocolArm64.Memory
         {
             if (Sse.IsSupported && (position & 15) == 0)
             {
-                Sse.Store((float*)Translate(position), value);
+                Sse.Store((float*)TranslateForWrite(position), value);
             }
             else
             {
@@ -702,7 +817,7 @@ namespace ChocolArm64.Memory
 
                 int copySize = (int)(pageLimit - position);
 
-                Marshal.Copy(data, offset, Translate(position), copySize);
+                Marshal.Copy(data, offset, TranslateForWrite(position), copySize);
 
                 position += copySize;
                 offset   += copySize;

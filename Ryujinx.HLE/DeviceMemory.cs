@@ -14,7 +14,7 @@ namespace Ryujinx.HLE
 
         public unsafe DeviceMemory()
         {
-            RamPointer = MemoryAllocWindows.AllocateWriteTracked(new IntPtr(RamSize));
+            RamPointer = MemoryAlloc.AllocateWriteTracked(new IntPtr(RamSize));
 
             _ramPtr = (byte*)RamPointer;
         }
@@ -178,7 +178,7 @@ namespace Ryujinx.HLE
 
         protected virtual void Dispose(bool disposing)
         {
-            Marshal.FreeHGlobal(RamPointer);
+            MemoryAlloc.Free(RamPointer);
         }
     }
 }

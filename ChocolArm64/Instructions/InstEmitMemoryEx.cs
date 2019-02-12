@@ -64,8 +64,6 @@ namespace ChocolArm64.Instructions
 
             context.EmitLdint(op.Rn);
             context.EmitSttmp();
-
-            context.EmitLdarg(TranslatedSub.MemoryArgIdx);
             context.EmitLdtmp();
 
             EmitReadZxCall(context, op.Size);
@@ -74,7 +72,6 @@ namespace ChocolArm64.Instructions
 
             if (pair)
             {
-                context.EmitLdarg(TranslatedSub.MemoryArgIdx);
                 context.EmitLdtmp();
                 context.EmitLdc_I8(1 << op.Size);
 
@@ -136,7 +133,6 @@ namespace ChocolArm64.Instructions
 
             context.MarkLabel(lblEx);
 
-            context.EmitLdarg(TranslatedSub.MemoryArgIdx);
             context.EmitLdint(op.Rn);
             context.EmitLdintzr(op.Rt);
 
@@ -144,7 +140,6 @@ namespace ChocolArm64.Instructions
 
             if (pair)
             {
-                context.EmitLdarg(TranslatedSub.MemoryArgIdx);
                 context.EmitLdint(op.Rn);
                 context.EmitLdc_I8(1 << op.Size);
 
