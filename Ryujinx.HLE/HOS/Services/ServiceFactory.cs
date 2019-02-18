@@ -94,10 +94,10 @@ namespace Ryujinx.HLE.HOS.Services
                     return new IeTicketService();
 
                 case "friend:a":
-                    return new Friend.IServiceCreator();
+                    return new Friend.IServiceCreator(system);
 
                 case "friend:u":
-                    return new Friend.IServiceCreator();
+                    return new Friend.IServiceCreator(system);
 
                 case "fsp-srv":
                     return new IFileSystemProxy();
@@ -207,6 +207,12 @@ namespace Ryujinx.HLE.HOS.Services
 
                 case "vi:u":
                     return new IApplicationRootService();
+
+                case "mii:e":
+                    return new Mii.IStaticService();
+
+                case "mii:u":
+                    return new Mii.IStaticService();
             }
 
             throw new NotImplementedException(name);
